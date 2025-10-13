@@ -1,18 +1,36 @@
-# app.py
-from flask import Flask, render_template, request, jsonify
-import pickle
-import numpy as np
 import os
+from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
 
-# Load model artifacts
-def load_model():
-    with open('model_artifacts.pkl', 'rb') as f:
-        artifacts = pickle.load(f)
-    return artifacts
-
-artifacts = load_model()
+def predict_service_time(car_condition, service_type, staff_experience, spare_part_status, workload):
+    """
+    Rule-based prediction without ML dependencies
+    """
+    # Base service times (hours)
+    service_times = {
+        'Oil Change': 1.0,
+        'Tire Rotation': 1.5, 
+        'Brake Service': 3.0,
+        'AC Service': 4.0,
+        'Electrical': 5.0,
+        'Engine Repair': 8.0,
+        'Transmission': 10.0
+    }
+    
+    # Multipliers
+    condition_multiplier = {'Excellent': 0.8, 'Good': 1.0, 'Fair': 1.3, 'Poor': 1.7}
+    parts_multiplier = {'In Stock': 1.0, 'Available Soon': 1.5, 'Need Ordering': 2.0}
+    
+    # Calculate
+    base_time = service_times.get(service_type, 2.0)
+    total_time = base_time
+    total_time *= condition_multiplier.get(car_condition, 1.0)
+    total_time *= parts_multiplier.get(spare_part_status, 1.0)
+    total_time *= max(0.7, 1.3 - (staff_experience * 0.03))
+    total_time *= (1 + (workload * 0.08))
+    
+    return max(0.5, round(total_time, 2))
 
 @app.route('/')
 def home():
@@ -21,30 +39,15 @@ def home():
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
-        # Get form data
         car_condition = request.form['car_condition']
         service_type = request.form['service_type']
         staff_experience = float(request.form['staff_experience'])
         spare_part_status = request.form['spare_part_status']
         workload = float(request.form['workload'])
         
-        # Preprocess input
-        condition_encoded = artifacts['le_condition'].transform([car_condition])[0]
-        service_encoded = artifacts['le_service'].transform([service_type])[0]
-        parts_encoded = artifacts['le_parts'].transform([spare_part_status])[0]
+        hours = predict_service_time(car_condition, service_type, staff_experience, spare_part_status, workload)
         
-        # Create feature array
-        features = np.array([[condition_encoded, service_encoded, staff_experience, 
-                            parts_encoded, workload]])
-        
-        # Scale features
-        features_scaled = artifacts['scaler'].transform(features)
-        
-        # Make prediction
-        prediction = artifacts['model'].predict(features_scaled)[0]
-        
-        # Format prediction
-        hours = max(0.5, prediction)  # Ensure minimum 0.5 hours
+        # Format output
         if hours < 1:
             time_str = f"{int(hours * 60)} minutes"
         elif hours == 1:
@@ -52,13 +55,13 @@ def predict():
         elif hours < 24:
             time_str = f"{hours:.1f} hours"
         else:
-            days = hours / 8  # Assuming 8-hour work day
+            days = hours / 8
             time_str = f"{days:.1f} days"
         
         return jsonify({
             'success': True,
             'prediction': time_str,
-            'raw_hours': round(hours, 2)
+            'raw_hours': hours
         })
         
     except Exception as e:
@@ -67,44 +70,10 @@ def predict():
             'error': str(e)
         })
 
-@app.route('/api/predict', methods=['POST'])
-def api_predict():
-    """API endpoint for programmatic access"""
-    try:
-        data = request.get_json()
-        
-        car_condition = data['car_condition']
-        service_type = data['service_type']
-        staff_experience = float(data['staff_experience'])
-        spare_part_status = data['spare_part_status']
-        workload = float(data['workload'])
-        
-        # Preprocess input
-        condition_encoded = artifacts['le_condition'].transform([car_condition])[0]
-        service_encoded = artifacts['le_service'].transform([service_type])[0]
-        parts_encoded = artifacts['le_parts'].transform([spare_part_status])[0]
-        
-        # Create feature array
-        features = np.array([[condition_encoded, service_encoded, staff_experience, 
-                            parts_encoded, workload]])
-        
-        # Scale features
-        features_scaled = artifacts['scaler'].transform(features)
-        
-        # Make prediction
-        prediction = artifacts['model'].predict(features_scaled)[0]
-        
-        return jsonify({
-            'turnaround_time_hours': round(max(0.5, prediction), 2),
-            'car_condition': car_condition,
-            'service_type': service_type,
-            'staff_experience': staff_experience,
-            'spare_part_status': spare_part_status,
-            'workload': workload
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy', 'message': 'Service running smoothly'})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
